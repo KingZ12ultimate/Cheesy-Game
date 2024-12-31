@@ -1,0 +1,9 @@
+<engine:UXML xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:engine="UnityEngine.UIElements" xmlns:editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../UIElementsSchema/UIElements.xsd" editor-extension-mode="False">
+    <engine:VisualElement name="Root" style="flex-grow: 1; height: 320px; justify-content: flex-start; align-items: center;">
+        <engine:ProgressBar value="22" title="Dash" data-source-type="Player, Assembly-CSharp" style="width: 76px; align-items: stretch; height: 23px; justify-content: center; align-self: flex-start; align-content: flex-start;">
+            <Bindings>
+                <engine:DataBinding property="value" binding-mode="ToTarget" />
+            </Bindings>
+        </engine:ProgressBar>
+    </engine:VisualElement>
+</engine:UXML>

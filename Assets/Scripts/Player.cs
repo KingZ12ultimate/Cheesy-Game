@@ -1,10 +1,16 @@
+using System;
+using System.Collections;
+using System.Data;
 using UnityEngine;
+using UnityEngine.ProBuilder;
+using UnityEngine.UIElements;
 
 public class Player : MonoBehaviour
 {
     [SerializeField] private InputReader inputReader =  default;
     [SerializeField] private Transform playerInputSpace = default;
     [SerializeField] private Transform model;
+    [SerializeField] private Rigidbody bullet;
 
     [SerializeField, Tooltip("Max speed the player can reach.")]
     private float maxSpeed = 15.0f;
@@ -33,8 +39,23 @@ public class Player : MonoBehaviour
     [SerializeField, Min(0f), Tooltip("max distance for checking if snapping to ground is needed.")]
     private float probeDistance = 3f;
 
-    [SerializeField, Tooltip("Which layers don't represent ground.")]
-    private LayerMask probeMask = -1;
+    [SerializeField, Tooltip("Which layers represent ground.")]
+    private LayerMask groundMask = -1;
+
+    [SerializeField] private float bulletSpeed = 50f;
+    [SerializeField] private float attackDelay = 0.2f;
+    [SerializeField] private float fieldOfShooting = 120f;
+    [SerializeField] private float shootRadius = 10f;
+    [SerializeField] private Transform shootingPoint;
+    [SerializeField] private LayerMask shootMask = -1;
+
+    [SerializeField] private float shockSpeed = 15f;
+    [SerializeField] private float shockTimeFromDamage = 0.5f;
+    [SerializeField] private float maxHealth = 100f;
+
+    [SerializeField] private float dashSpeed = 30f;
+    [SerializeField] private float dashCooldown = 1f;
+    [SerializeField, Range(0f, 0.4f)] private float dashDuration = 0.2f;
 
     [Tooltip("Take off speed of the player's jump.")]
     private float jumpSpeed;
@@ -47,40 +68,55 @@ public class Player : MonoBehaviour
     private bool OnGround => groundContactCount > 0;
     private bool OnSteep => steepContactCount > 0;
     private float jumpBufferTimer = 0f;
+    private float attackDelayTimer = 0f;
+    private float dashCooldownTimer = 0f;
     private float minGroundDotProduct;
     private Rigidbody rb;
-    private Vector3 moveInput;
-    private Vector3 linearVelocity, desiredVelocity = Vector3.zero;
+    private Vector2 moveInput = Vector2.zero;
+    private Vector3 linearVelocity, desiredVelocity, movement, jumpDirection = Vector3.zero;
     private Vector3 contactNormal, steepNormal;
+
+    private float health;
+    private bool dashing = false;
 
     private Vector3 ProjectOnContactPlane(Vector3 vector)
     {
         return vector - contactNormal * Vector3.Dot(vector, contactNormal);
     }
 
+    #region Enable / Disable
     private void OnEnable()
     {
-        inputReader.moveEvent += OnMove;
-        inputReader.jumpEvent += OnJump;
+        inputReader.MoveEvent += OnMove;
+        inputReader.JumpEvent += OnJump;
+        inputReader.JumpCanceledEvent += OnJumpCanceled;
+        inputReader.AttackEvent += OnAttack;
+        inputReader.dashEvent += OnDash;
     }
 
     private void OnDisable()
     {
-        inputReader.moveEvent -= OnMove;
-        inputReader.jumpEvent -= OnJump;
+        inputReader.MoveEvent -= OnMove;
+        inputReader.JumpEvent -= OnJump;
+        inputReader.JumpCanceledEvent -= OnJumpCanceled;
+        inputReader.AttackEvent -= OnAttack;
+        inputReader.dashEvent -= OnDash;
     }
+    #endregion
 
+    #region Collisions
     private void OnCollisionEnter(Collision collision)
     {
-        EvaluateCollisions(collision);
+        if (collision.gameObject.layer == groundMask)
+            EvaluateGroundCollisions(collision);
     }
 
     private void OnCollisionStay(Collision collision)
     {
-        EvaluateCollisions(collision);
+        EvaluateGroundCollisions(collision);
     }
 
-    private void EvaluateCollisions(Collision collision)
+    private void EvaluateGroundCollisions(Collision collision)
     {
         for (int i = 0; i < collision.contactCount; i++)
         {
@@ -89,6 +125,7 @@ public class Player : MonoBehaviour
             {
                 groundContactCount++;
                 contactNormal += normal;
+                linearVelocity.y = 0f;
             }
             else if (normal.y > -0.01f)
             {
@@ -105,8 +142,8 @@ public class Player : MonoBehaviour
         float speed = linearVelocity.magnitude;
         if (speed > maxSnapSpeed) return false;
 
-        if (!Physics.Raycast(rb.position, Vector3.down, out RaycastHit hit, 
-            probeDistance, ~probeMask)) return false;
+        if (!Physics.Raycast(rb.position, Vector3.down, out RaycastHit hit,
+            probeDistance, groundMask)) return false;
         if (hit.normal.y < minGroundDotProduct) return false;
 
         groundContactCount = 1;
@@ -131,7 +168,9 @@ public class Player : MonoBehaviour
         }
         return false;
     }
+    #endregion
 
+    #region Update Related Methods
     private void UpdateState()
     {
         stepsSinceLastGrounded++;
@@ -149,8 +188,32 @@ public class Player : MonoBehaviour
         {
             contactNormal = Vector3.up;
         }
+
+        if (playerInputSpace)
+        {
+            Vector3 forward = playerInputSpace.forward;
+            forward.y = 0f;
+            forward.Normalize();
+            Vector3 right = playerInputSpace.right;
+            right.y = 0f;
+            right.Normalize();
+            movement = right * moveInput.x + forward * moveInput.y;
+        }
+        else
+        {
+            movement = Vector3.right * moveInput.x + Vector3.forward * moveInput.y;
+        }
+        desiredVelocity = movement * maxSpeed;
     }
 
+    private void ClearState()
+    {
+        groundContactCount = steepContactCount = 0;
+        contactNormal = steepNormal = Vector3.zero;
+    }
+    #endregion
+
+    #region Velocity Updates
     private void AdjustVelocity()
     {
         Vector3 xAxis = ProjectOnContactPlane(Vector3.right);
@@ -171,9 +234,8 @@ public class Player : MonoBehaviour
         jumpBufferTimer = 0f;
         stepsSinceLastJump = 0;
 
-        Vector3 jumpDirection;
         if (OnGround)
-            jumpDirection = contactNormal;
+            jumpDirection = Vector3.up;
         else if (OnSteep)
             jumpDirection = steepNormal;
         else return;
@@ -184,15 +246,13 @@ public class Player : MonoBehaviour
             Mathf.Max(jumpSpeed - alignedSpeed, 0f) : jumpSpeed;
         linearVelocity += jumpDirection * finalJumpSpeed;
     }
+    #endregion
 
-    private void ClearState()
-    {
-        groundContactCount = steepContactCount = 0;
-        contactNormal = steepNormal = Vector3.zero;
-    }
-
+    #region Unity Messages
     private void Awake()
     {
+        health = maxHealth;
+
         rb = GetComponent<Rigidbody>();
         rb.useGravity = false;
 
@@ -210,10 +270,12 @@ public class Player : MonoBehaviour
     private void Update()
     {
         jumpBufferTimer -= Time.deltaTime;
+        attackDelayTimer -= Time.deltaTime;
+        dashCooldownTimer -= Time.deltaTime;
         
-        if (moveInput != Vector3.zero)
+        if (movement != Vector3.zero && !dashing)
         {
-            Quaternion toRotation = Quaternion.LookRotation(moveInput);
+            Quaternion toRotation = Quaternion.LookRotation(movement);
             model.rotation = Quaternion.RotateTowards(model.rotation, toRotation, rotationSpeed * Time.deltaTime);
         }
     }
@@ -221,13 +283,52 @@ public class Player : MonoBehaviour
     private void FixedUpdate()
     {
         UpdateState();
-        AdjustVelocity();
+        
+        if (!dashing)
+            AdjustVelocity();
 
         if (jumpBufferTimer > 0f && (OnGround || OnSteep))
             Jump();
 
         rb.linearVelocity = linearVelocity;
         ClearState();
+    }
+    #endregion
+
+    #region Callback Methods
+    private void OnAttack()
+    {
+        if (attackDelayTimer > 0f) return;
+
+        Vector3 shootDir;
+        Collider[] hits = Physics.OverlapSphere(rb.position, shootRadius, shootMask);
+        if (hits.Length == 0)
+        {
+            shootDir = model.forward;
+        }
+        else
+        {
+            Rigidbody closestEnemy = hits[0].attachedRigidbody;
+            shootDir = (closestEnemy.position - rb.position).normalized;
+            if (Vector3.Angle(model.forward, shootDir) > 0.5f * fieldOfShooting)
+                shootDir = model.forward;
+        }
+
+        Quaternion rotation = Quaternion.LookRotation(shootDir);
+        Rigidbody bullet_rb = Instantiate(bullet, shootingPoint.position, rotation);
+        bullet_rb.linearVelocity = shootDir * bulletSpeed;
+
+        attackDelayTimer = attackDelay;
+    }
+
+    private void OnDash()
+    {
+        if (dashCooldownTimer > 0f || dashing) return;
+
+        dashing = true;
+        Vector3 dashVelocity = (movement != Vector3.zero ? movement : model.forward) * dashSpeed;
+        rb.AddForce(dashVelocity, ForceMode.VelocityChange);
+        StartCoroutine(EndDash());
     }
 
     private void OnJump()
@@ -237,26 +338,41 @@ public class Player : MonoBehaviour
 
     private void OnJumpCanceled()
     {
-        
+        float alignedSpeed = Vector3.Dot(linearVelocity, jumpDirection);
+        if (!OnGround && alignedSpeed > 0f)
+            linearVelocity -= 0.5f * jumpDirection;
     }
 
     private void OnMove(Vector2 move)
     {
-        if (playerInputSpace)
-        {
-            Vector3 forward = playerInputSpace.forward;
-            forward.y = 0f;
-            forward.Normalize();
-            Vector3 right = playerInputSpace.right;
-            right.y = 0f;
-            right.Normalize();
-            moveInput = right * move.x + forward * move.y;
-            desiredVelocity = moveInput * maxSpeed;
-        }
-        else
-        {
-            moveInput = Vector3.right * move.x + Vector3.forward * move.y;
-            desiredVelocity = moveInput * maxSpeed;
-        }
+        moveInput = move;
     }
+
+    public void OnDamaged(Collision collision, float damage)
+    {
+        if (health > 0f) health -= damage;
+        Vector3 normal = Vector3.up;
+        for (int i = 0; i < collision.contactCount; i++)
+        {
+            normal -= collision.GetContact(i).normal;
+        }
+        normal.Normalize();
+        rb.AddForce(normal * shockSpeed, ForceMode.VelocityChange);
+        inputReader.gameInput.Player.Disable();
+        StartCoroutine(EnableInputAfterShock());
+    }
+
+    private IEnumerator EnableInputAfterShock()
+    {
+        yield return new WaitForSeconds(shockTimeFromDamage);
+        inputReader.gameInput.Player.Enable();
+    }
+
+    private IEnumerator EndDash()
+    {
+        yield return new WaitForSeconds(dashDuration);
+        dashing = false;
+        dashCooldownTimer = dashCooldown;
+    }
+    #endregion
 }

@@ -60,12 +60,12 @@ public class OrbitCamera : MonoBehaviour
 
     private void OnEnable()
     {
-        inputReader.lookEvent += OnLook;
+        inputReader.LookEvent += OnLook;
     }
 
     private void OnDisable()
     {
-        inputReader.lookEvent -= OnLook;
+        inputReader.LookEvent -= OnLook;
     }
 
     private void OnValidate()
@@ -169,19 +169,19 @@ public class OrbitCamera : MonoBehaviour
         Vector3 lookDirection = lookRotation * Vector3.forward;
         Vector3 lookPosition = focusPoint - lookDirection * distance;
 
-        Vector3 rectOffset = lookDirection * regularCamera.nearClipPlane;
-        Vector3 rectPosition = lookPosition + rectOffset;
-        Vector3 castFrom = focus.position;
-        Vector3 castLine = rectPosition - castFrom;
-        float castDistance = castLine.magnitude;
-        Vector3 castDirection = castLine / castDistance;
+        //Vector3 rectOffset = lookDirection * regularCamera.nearClipPlane;
+        //Vector3 rectPosition = lookPosition + rectOffset;
+        //Vector3 castFrom = focus.position;
+        //Vector3 castLine = rectPosition - castFrom;
+        //float castDistance = castLine.magnitude;
+        //Vector3 castDirection = castLine / castDistance;
 
-        if (Physics.BoxCast(castFrom, CameraHalfExtents, castDirection, out RaycastHit hit, 
-            lookRotation, castDistance, ~obstructionMask))
-        {
-            rectPosition = castFrom + castDirection * hit.distance;
-            lookPosition = rectPosition - rectOffset;
-        }
+        //if (Physics.BoxCast(castFrom, CameraHalfExtents, castDirection, out RaycastHit hit, 
+        //    lookRotation, castDistance, ~obstructionMask))
+        //{
+        //    rectPosition = castFrom + castDirection * hit.distance;
+        //    lookPosition = rectPosition - rectOffset;
+        //}
 
         transform.SetPositionAndRotation(lookPosition, lookRotation);
     }
@@ -189,7 +189,7 @@ public class OrbitCamera : MonoBehaviour
     private void OnLook(Vector2 look)
     {
         // The orbit angles are stored in the format (Vertical, Horizontal) so the input vector should be swapped.
-        lookInput.x = -look.y;
+        lookInput.x = look.y;
         lookInput.y = look.x;
     }
 }
